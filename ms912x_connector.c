@@ -24,8 +24,6 @@ static int ms912x_get_connector_type(struct ms912x_device *ms912x)
 		ms912x->port_type = MS912X_VIDEO_PORT_UNKNOWN;
 		return DRM_MODE_CONNECTOR_Unknown;
 	}
-	drm_info(&ms912x->drm,
-			 "video port type: %d\n", port_type);
 
 	ms912x->port_type = port_type;
 

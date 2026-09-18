@@ -105,48 +105,51 @@ ctrl_unlock:
 	return ret;
 }
 
-static int ms912x_read_chip_signature(struct ms912x_device *ms912x, u16 address,
-				      u8 signature[3])
-{
-	unsigned int i;
-	int ret;
-
-	for (i = 0; i < 3; i++) {
-		ret = ms912x_read_byte(ms912x, address + i);
-		if (ret < 0)
-			return ret;
-		signature[i] = ret;
-	}
-
-	return 0;
-}
-
-static int ms912x_custom_timing_base(struct ms912x_device *ms912x, u32 *base)
+static int ms912x_custom_timing_base(struct ms912x_device *ms912x)
 {
 	u8 signature[3];
 	int ret;
 
-	ret = ms912x_read_chip_signature(ms912x, MS913X_REG_CHIP_ID, signature);
-	if (ret)
+	/* Read chip signature */
+	ret = ms912x_read_byte(ms912x, MS913X_REG_CHIP_ID);
+	if (ret < 0)
 		return ret;
+	signature[0] = ret;
+
+	ret = ms912x_read_byte(ms912x, MS913X_REG_CHIP_ID + 1);
+	if (ret < 0)
+		return ret;
+	signature[1] = ret;
+
+	ret = ms912x_read_byte(ms912x, MS913X_REG_CHIP_ID + 2);
+	if (ret < 0)
+		return ret;
+	signature[2] = ret;
 
 	if (signature[1] == MS913X_CHIP_ID_SIGNATURE_MSB &&
-	    signature[2] == MS91XX_CHIP_ID_SIGNATURE_LSB) {
-		*base = MS913X_CUSTOM_TIMING_BASE;
-		return 1;
-	}
+	    signature[2] == MS91XX_CHIP_ID_SIGNATURE_LSB)
+		return MS913X_CUSTOM_TIMING_BASE;
 
-	ret = ms912x_read_chip_signature(ms912x, MS912X_REG_CHIP_ID, signature);
-	if (ret)
+	ret = ms912x_read_byte(ms912x, MS912X_REG_CHIP_ID);
+	if (ret < 0)
 		return ret;
+	signature[0] = ret;
+
+	ret = ms912x_read_byte(ms912x, MS912X_REG_CHIP_ID + 1);
+	if (ret < 0)
+		return ret;
+	signature[1] = ret;
+
+	ret = ms912x_read_byte(ms912x, MS912X_REG_CHIP_ID + 2);
+	if (ret < 0)
+		return ret;
+	signature[2] = ret;
 
 	if (signature[1] == MS912X_CHIP_ID_SIGNATURE_MSB &&
-	    signature[2] == MS91XX_CHIP_ID_SIGNATURE_LSB) {
-		*base = MS912X_CUSTOM_TIMING_BASE;
-		return 1;
-	}
+	    signature[2] == MS91XX_CHIP_ID_SIGNATURE_LSB)
+		return MS912X_CUSTOM_TIMING_BASE;
 
-	return 0;
+	return -ENODEV;
 }
 
 static int
@@ -217,14 +220,13 @@ int ms912x_read_custom_timing(struct ms912x_device *ms912x)
 	unsigned int num_records, i;
 	int error = 0;
 	u8 marker[7];
-	u32 base;
-	int ret;
+	int base, ret;
 
 	ms912x->num_custom_modes = 0;
 
-	ret = ms912x_custom_timing_base(ms912x, &base);
-	if (ret <= 0)
-		return ret;
+	base = ms912x_custom_timing_base(ms912x);
+	if (base < 0)
+		return base;
 
 	ret = ms912x_read_flash(ms912x, base, marker, sizeof(marker));
 	if (ret)
