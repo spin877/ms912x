@@ -5,8 +5,17 @@
 #include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/pm.h>
+#include <linux/slab.h>
+#include <linux/string.h>
 #include <linux/usb.h>
 #include <linux/workqueue.h>
+
+static char *custom_mode;
+module_param(custom_mode, charp, 0444);
+MODULE_PARM_DESC(custom_mode,
+		 "Custom panel modes which the EDID does not report: "
+		 "<vic>_<width>x<height>@<refresh>[,...] "
+		 "(e.g. 150_1024x600@60 for 7\" 1024x600 panels)");
 
 #include <drm/clients/drm_client_setup.h>
 #include <drm/drm_atomic.h>
@@ -20,6 +29,7 @@
 #include <drm/drm_gem_framebuffer_helper.h>
 #include <drm/drm_gem_shmem_helper.h>
 #include <drm/drm_managed.h>
+#include <drm/drm_modes.h>
 #include <drm/drm_modeset_helper.h>
 #include <drm/drm_ioctl.h>
 #include <drm/drm_probe_helper.h>
@@ -69,6 +79,61 @@ ms912x_mode_config_helper_funcs = {
 	.atomic_commit_tail = drm_atomic_helper_commit_tail_rpm,
 };
 
+static void ms912x_parse_custom_mode(struct ms912x_device *ms912x)
+{
+	char *ori, *start, *cur;
+	int vic, width, height, hz;
+
+	if (!custom_mode || !*custom_mode)
+		return;
+
+	ori = kstrdup(custom_mode, GFP_KERNEL);
+	if (!ori)
+		return;
+
+	start = ori;
+	while ((cur = strsep(&start, ",")) != NULL) {
+		struct ms912x_custom_mode *custom;
+		struct drm_display_mode *mode;
+
+		if (ms912x->num_custom_modes >=
+		    ARRAY_SIZE(ms912x->custom_modes))
+			break;
+
+		vic = width = height = hz = 0;
+		if (sscanf(cur, "%d_%dx%d@%d", &vic, &width, &height,
+			   &hz) != 4)
+			continue;
+		if (vic <= 0 || vic > 255 || width <= 0 || height <= 0 ||
+		    hz <= 0 || width > MS912X_MAX_WIDTH ||
+		    height > MS912X_MAX_HEIGHT)
+			continue;
+
+		mode = drm_cvt_mode(&ms912x->drm, width, height, hz, false,
+				    false, false);
+		if (!mode)
+			continue;
+
+		custom = &ms912x->custom_modes[ms912x->num_custom_modes];
+		custom->mode.width = width;
+		custom->mode.height = height;
+		custom->mode.hz = hz;
+		custom->mode.mode = vic;
+		custom->display_mode = *mode;
+		custom->display_mode.type |= DRM_MODE_TYPE_DRIVER;
+		if (!ms912x->num_custom_modes)
+			custom->display_mode.type |= DRM_MODE_TYPE_PREFERRED;
+		drm_mode_destroy(&ms912x->drm, mode);
+
+		drm_info(&ms912x->drm,
+			 "custom mode %dx%d@%d uses mode 0x%02x (module param)\n",
+			 width, height, hz, vic);
+		ms912x->num_custom_modes++;
+	}
+
+	kfree(ori);
+}
+
 static const struct ms912x_mode ms912x_mode_list[] = {
 	/* Found in captures of the Windows driver and dumped from device */
 	MS912X_MODE(720, 480, 60, 0x02), /* 60.00 Hz */
@@ -81,6 +146,7 @@ static const struct ms912x_mode ms912x_mode_list[] = {
 	MS912X_MODE(800, 600, 75, 0x44), /* 75.00 Hz */
 	MS912X_MODE(1024,  768, 60, 0x47), /* 60.00 Hz */
 	MS912X_MODE(1024,  768, 75, 0x49), /* 75.03 Hz */
+	MS912X_MODE(1024,  600, 60, 150), /* 60.00 Hz, vendor VIC for 7" panels */
 	MS912X_MODE(1152,  864, 60, 0x4c), /* 60.00 Hz */
 	MS912X_MODE(1280,  600, 60, 0x4e), /* 60.00 Hz */
 	MS912X_MODE(1280,  720, 60, 0x4f), /* 60.00 Hz */
@@ -129,7 +195,7 @@ ms912x_get_mode(struct ms912x_device *ms912x,
 }
 
 static void ms912x_crtc_atomic_enable(struct drm_crtc *crtc,
-				      struct drm_atomic_commit *state)
+				      struct drm_atomic_state *state)
 {
 	struct drm_crtc_state *crtc_state =
 		drm_atomic_get_new_crtc_state(state, crtc);
@@ -138,18 +204,16 @@ static void ms912x_crtc_atomic_enable(struct drm_crtc *crtc,
 	const struct ms912x_mode *ms_mode;
 	int ret;
 
-	ret = ms912x_power_on(ms912x);
-	if (ret) {
-		drm_err(dev, "failed to power on display: %d\n", ret);
-		return;
-	}
-
 	ms_mode = ms912x_get_mode(ms912x, &crtc_state->mode);
 	if (!ms_mode) {
 		drm_err(dev, "unsupported mode passed to CRTC enable\n");
 		return;
 	}
 
+	/* set_resolution runs the full official enable sequence
+	 * (power, trans mode, in/out info) and leaves video+screen
+	 * muted until the first frame completes.
+	 */
 	ret = ms912x_set_resolution(ms912x, ms_mode);
 	if (ret)
 		drm_err(dev, "failed to set display mode: %d\n", ret);
@@ -168,13 +232,20 @@ static void ms912x_cancel_transfer_work(struct ms912x_device *ms912x)
 }
 
 static void ms912x_crtc_atomic_disable(struct drm_crtc *crtc,
-				       struct drm_atomic_commit *state)
+				       struct drm_atomic_state *state)
 {
 	struct drm_device *dev = crtc->dev;
 	struct ms912x_device *ms912x = to_ms912x(dev);
 	int ret;
 
 	ms912x_cancel_transfer_work(ms912x);
+	ms912x->screen_muted = false;
+	cancel_delayed_work_sync(&ms912x->idle_work);
+	/* Official disable order: trans, video, screen, power. */
+	if (ms912x_trans_enable(ms912x, 0) ||
+	    ms912x_video_enable(ms912x, 0) ||
+	    ms912x_screen_enable(ms912x, 0))
+		drm_warn(dev, "failed to mute display\n");
 	ret = ms912x_power_off(ms912x);
 	if (ret && ret != -ENODEV)
 		drm_err(dev, "failed to power off display: %d\n", ret);
@@ -194,7 +265,7 @@ ms912x_crtc_mode_valid(struct drm_crtc *crtc,
 }
 
 static int ms912x_plane_atomic_check(struct drm_plane *plane,
-				     struct drm_atomic_commit *state)
+				     struct drm_atomic_state *state)
 {
 	struct drm_plane_state *old_plane_state;
 	struct drm_plane_state *new_plane_state;
@@ -238,7 +309,7 @@ static void ms912x_merge_rects(struct drm_rect *dest, struct drm_rect *r1,
 }
 
 static void ms912x_plane_atomic_update(struct drm_plane *plane,
-				       struct drm_atomic_commit *state)
+				       struct drm_atomic_state *state)
 {
 	struct drm_plane_state *old_plane_state;
 	struct drm_plane_state *new_plane_state;
@@ -336,6 +407,10 @@ static int ms912x_usb_probe(struct usb_interface *interface,
 	ret = devm_mutex_init(&interface->dev, &ms912x->ctrl_lock);
 	if (ret)
 		return ret;
+	ret = devm_mutex_init(&interface->dev, &ms912x->update_lock);
+	if (ret)
+		return ret;
+	INIT_DELAYED_WORK(&ms912x->idle_work, ms912x_idle_work);
 
 	if (!usb_check_bulk_endpoints(interface, ms912x_bulk_out_endpoints))
 		return -ENXIO;
@@ -352,6 +427,7 @@ static int ms912x_usb_probe(struct usb_interface *interface,
 			 "custom mode %dx%d@%d uses mode 0x%02x\n",
 			 mode->width, mode->height, mode->hz, mode->mode);
 	}
+	ms912x_parse_custom_mode(ms912x);
 
 	usbdev = interface_to_usbdev(interface);
 	ms912x->bulk_pipe =
