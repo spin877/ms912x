@@ -44,10 +44,31 @@
 
 #define MS912X_CMD_RESOLUTION		0x01
 #define MS912X_CMD_MODE			0x02
-#define MS912X_CMD_UNKNOWN1		0x03
-#define MS912X_CMD_UNKNOWN2		0x04
+#define MS912X_CMD_TRANS_MODE		0x03
+#define MS912X_CMD_TRANSFER		0x04
 #define MS912X_CMD_OUTPUT_ENABLE	0x05
 #define MS912X_CMD_POWER		0x07
+
+#define MS912X_TRANS_MODE_MANUAL_BLOCK	0x03
+
+#define MS912X_REQ_TYPE_WRITE_BYTE	0xb6
+
+/* xdata screen-unmute registers (MacroSilicon official sequence).
+ * The panel stays muted until video+screen are enabled AFTER the first
+ * frame has been transferred; without this the 913x firmware shows black.
+ */
+#define MS912X_XDATA_SCREEN_9132_HDMI	0xfb07
+#define MS912X_XDATA_SCREEN_9132_HDMI_BIT	1
+#define MS912X_XDATA_SCREEN_9132_OTHER	0xf037
+#define MS912X_XDATA_SCREEN_912X_HDMI	0xf507
+#define MS912X_XDATA_SCREEN_912X_VGA	0xf004
+#define MS912X_XDATA_SCREEN_912X_YPBPR	0xf030
+#define MS912X_XDATA_SCREEN_912X_DIGITAL	0xf005
+
+enum ms912x_chip_id {
+	MS912X_CHIP_9132,
+	MS912X_CHIP_912X,
+};
 
 #define MS913X_REG_CHIP_ID			0xff00
 #define MS912X_REG_CHIP_ID			0xf000
@@ -120,16 +141,34 @@ struct ms912x_device {
 	struct drm_crtc crtc;
 	struct drm_plane plane;
 
-	struct ms912x_custom_mode custom_modes[2];
+	struct ms912x_custom_mode custom_modes[8];
 	unsigned int num_custom_modes;
 
 	struct drm_rect update_rect;
+
+	/* Official 913x enable sequence keeps video+screen muted until the
+	 * first frame has been transferred successfully. Set at modeset,
+	 * cleared by the transfer worker after the first completed send.
+	 */
+	bool screen_muted;
 
 	/* Double buffer to allow memcpy and transfer
 	 * to happen in parallel
 	 */
 	int current_request;
 	struct ms912x_usb_request requests[2];
+
+	/* Serializes frame queuing (atomic path) against the idle
+	 * keepalive resend worker so they never touch the same buffer.
+	 */
+	struct mutex update_lock;
+	/* Idle keepalive: the 912C firmware blanks the panel when no bulk
+	 * traffic arrives for a while, so resend the last frame every
+	 * idle_refresh_ms (vendor does the same, default 2500ms).
+	 */
+	struct delayed_work idle_work;
+	bool has_frame;
+	unsigned long last_send;
 };
 
 struct ms912x_request {
@@ -202,6 +241,10 @@ int ms912x_set_resolution(struct ms912x_device *ms912x,
 int ms912x_power_on(struct ms912x_device *ms912x);
 int ms912x_power_off(struct ms912x_device *ms912x);
 
+int ms912x_trans_enable(struct ms912x_device *ms912x, u8 enable);
+int ms912x_video_enable(struct ms912x_device *ms912x, u8 enable);
+int ms912x_screen_enable(struct ms912x_device *ms912x, u8 enable);
+
 int ms912x_fb_send_rect(struct drm_framebuffer *fb, const struct iosys_map *map,
 			struct drm_format_conv_state *fmtcnv_state,
 			struct drm_rect *rect);
@@ -209,4 +252,6 @@ int ms912x_fb_send_rect(struct drm_framebuffer *fb, const struct iosys_map *map,
 void ms912x_free_request(struct ms912x_usb_request *request);
 int ms912x_init_request(struct ms912x_device *ms912x,
 			struct ms912x_usb_request *request, size_t len);
+void ms912x_idle_work(struct work_struct *work);
+extern unsigned int idle_refresh_ms;
 #endif
