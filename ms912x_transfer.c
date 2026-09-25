@@ -97,6 +97,14 @@ static void ms912x_request_work(struct work_struct *work)
 	ret = ms912x_send_buffer(ms912x, usbdev, request->transfer_buffer,
 				 request->transfer_len);
 
+	if (!ret && ms912x->screen_muted) {
+		/* First frame transferred: unmute the screen. The 913x
+		 * firmware keeps the panel black without this.
+		 */
+		ms912x_screen_enable(ms912x, 1);
+		ms912x->screen_muted = false;
+	}
+
 	drm_dev_exit(idx);
 complete:
 	if (ret < 0 && ret != -ENODEV)

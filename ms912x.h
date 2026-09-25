@@ -31,6 +31,14 @@
 #define MS912X_REQ_TYPE_WRITE_6_BYTES	0xa6
 #define MS912X_REQ_TYPE_READ_BYTE	0xb5
 #define MS912X_REQ_TYPE_READ_FLASH	0xf5
+#define MS912X_REQ_TYPE_WRITE_BYTE	0xb6
+
+/* Screen-unmute xdata register (official sequence): the panel stays
+ * black until the screen is enabled AFTER the first frame has been
+ * transferred. Only the 912X+DIGITAL combination is handled.
+ */
+#define MS912X_XDATA_SCREEN_912X_DIGITAL	0xf005
+#define MS912X_SCREEN_ENABLE_BIT		0x10
 
 #define MS912X_REG_VIDEO_PORT		0x0031
 #define MS912X_REG_DISPLAY_STATUS	0x0032
@@ -120,6 +128,12 @@ struct ms912x_device {
 
 	struct drm_rect update_rect;
 
+	/* The screen stays muted until it is enabled after the first
+	 * successfully transferred frame (official sequence). Set at
+	 * modeset, cleared by the transfer worker.
+	 */
+	bool screen_muted;
+
 	/* Double buffer to allow memcpy and transfer
 	 * to happen in parallel
 	 */
@@ -196,6 +210,7 @@ int ms912x_set_resolution(struct ms912x_device *ms912x,
 
 int ms912x_power_on(struct ms912x_device *ms912x);
 int ms912x_power_off(struct ms912x_device *ms912x);
+int ms912x_screen_enable(struct ms912x_device *ms912x, u8 enable);
 
 int ms912x_fb_send_rect(struct drm_framebuffer *fb, const struct iosys_map *map,
 			struct drm_format_conv_state *fmtcnv_state,

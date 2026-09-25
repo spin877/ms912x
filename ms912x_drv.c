@@ -152,8 +152,15 @@ static void ms912x_crtc_atomic_enable(struct drm_crtc *crtc,
 	}
 
 	ret = ms912x_set_resolution(ms912x, ms_mode);
-	if (ret)
+	if (ret) {
 		drm_err(dev, "failed to set display mode: %d\n", ret);
+		return;
+	}
+
+	/* The screen stays muted until the first frame has been
+	 * transferred; the worker unmutes it then.
+	 */
+	ms912x->screen_muted = true;
 }
 
 static void ms912x_cancel_transfer_work(struct ms912x_device *ms912x)

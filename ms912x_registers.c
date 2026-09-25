@@ -311,6 +311,59 @@ int ms912x_power_off(struct ms912x_device *ms912x)
 	return ms912x_write_6_bytes(ms912x, MS912X_CMD_POWER, data);
 }
 
+static int ms912x_write_xdata_byte(struct ms912x_device *ms912x,
+				   u16 address, u8 value)
+{
+	/* HID report: {0xb6, addr_hi, addr_lo, data, 0, 0, 0, 0} */
+	u8 request[8];
+	struct usb_device *usb_dev;
+	int idx, ret;
+
+	if (!drm_dev_enter(&ms912x->drm, &idx))
+		return -ENODEV;
+
+	mutex_lock(&ms912x->ctrl_lock);
+
+	usb_dev = interface_to_usbdev(ms912x->intf);
+	memset(request, 0, sizeof(request));
+	request[0] = MS912X_REQ_TYPE_WRITE_BYTE;
+	request[1] = (address >> 8) & 0xff;
+	request[2] = address & 0xff;
+	request[3] = value;
+
+	ret = usb_control_msg_send(usb_dev, 0, HID_REQ_SET_REPORT,
+				   USB_DIR_OUT | USB_TYPE_CLASS |
+					   USB_RECIP_INTERFACE,
+				   0x0300, 0, request, sizeof(request),
+				   USB_CTRL_SET_TIMEOUT, GFP_KERNEL);
+	mutex_unlock(&ms912x->ctrl_lock);
+	drm_dev_exit(idx);
+
+	return ret;
+}
+
+int ms912x_screen_enable(struct ms912x_device *ms912x, u8 enable)
+{
+	u8 value = enable ? MS912X_SCREEN_ENABLE_BIT : 0x00;
+	int sig;
+
+	/* Only the 912X chip on the DIGITAL port is handled; anything
+	 * else is left untouched.
+	 */
+	if (ms912x->port_type != MS912X_VIDEO_PORT_DIGITAL)
+		return 0;
+	sig = ms912x_read_byte(ms912x, MS913X_REG_CHIP_ID + 1);
+	if (sig == MS913X_CHIP_ID_SIGNATURE_MSB)
+		return 0;
+	sig = ms912x_read_byte(ms912x, MS912X_REG_CHIP_ID + 1);
+	if (sig != MS912X_CHIP_ID_SIGNATURE_MSB)
+		return 0;
+
+	return ms912x_write_xdata_byte(ms912x,
+				       MS912X_XDATA_SCREEN_912X_DIGITAL,
+				       value);
+}
+
 int ms912x_set_resolution(struct ms912x_device *ms912x,
 			  const struct ms912x_mode *mode)
 {
