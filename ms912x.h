@@ -134,6 +134,15 @@ struct ms912x_device {
 	 */
 	bool screen_muted;
 
+	/* Idle keepalive: the 912C firmware blanks the panel when no
+	 * bulk traffic arrives for a while, so resend the last frame.
+	 */
+	struct delayed_work idle_work;
+	struct mutex update_lock;
+	bool has_frame;
+	unsigned long last_send;
+	int last_request;
+
 	/* Double buffer to allow memcpy and transfer
 	 * to happen in parallel
 	 */
@@ -219,4 +228,6 @@ int ms912x_fb_send_rect(struct drm_framebuffer *fb, const struct iosys_map *map,
 void ms912x_free_request(struct ms912x_usb_request *request);
 int ms912x_init_request(struct ms912x_device *ms912x,
 			struct ms912x_usb_request *request, size_t len);
+void ms912x_idle_work(struct work_struct *work);
+extern unsigned int idle_refresh_ms;
 #endif

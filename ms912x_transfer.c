@@ -23,6 +23,12 @@
 
 #include "ms912x.h"
 
+unsigned int idle_refresh_ms = 2500;
+module_param_named(idle_refresh_ms, idle_refresh_ms, uint, 0644);
+MODULE_PARM_DESC(idle_refresh_ms,
+		 "Resend the last frame when idle for this long (ms, 0 disables, default 2500). "
+		 "The 912C firmware blanks the panel without regular bulk traffic.");
+
 #define MS912X_BULK_CHUNK_LEN	(64 * 1024u)
 
 static int ms912x_send_buffer(struct ms912x_device *ms912x,
@@ -97,13 +103,20 @@ static void ms912x_request_work(struct work_struct *work)
 	ret = ms912x_send_buffer(ms912x, usbdev, request->transfer_buffer,
 				 request->transfer_len);
 
-	if (!ret && ms912x->screen_muted) {
-		/* First frame transferred: unmute the screen. The 913x
-		 * firmware keeps the panel black without this.
-		 */
-		ms912x_screen_enable(ms912x, 1);
-		ms912x->screen_muted = false;
+	mutex_lock(&ms912x->update_lock);
+	ms912x->last_send = jiffies;
+	if (!ret) {
+		ms912x->has_frame = true;
+		ms912x->last_request = (int)(request - ms912x->requests);
+		if (ms912x->screen_muted) {
+			/* First frame transferred: unmute the screen. The 913x
+			 * firmware keeps the panel black without this.
+			 */
+			ms912x_screen_enable(ms912x, 1);
+			ms912x->screen_muted = false;
+		}
 	}
+	mutex_unlock(&ms912x->update_lock);
 
 	drm_dev_exit(idx);
 complete:
@@ -269,11 +282,13 @@ int ms912x_fb_send_rect(struct drm_framebuffer *fb, const struct iosys_map *map,
 	if (!drm_dev_enter(drm, &idx))
 		return -ENODEV;
 
+	mutex_lock(&ms912x->update_lock);
+
 	/* Transfer buffer still in use, drop this frame. */
 	if (!wait_for_completion_timeout(&current_request->done,
 					 msecs_to_jiffies(10))) {
 		ret = -ETIMEDOUT;
-		goto dev_exit;
+		goto unlock;
 	}
 
 	ret = drm_gem_fb_begin_cpu_access(fb, DMA_FROM_DEVICE);
@@ -291,11 +306,48 @@ int ms912x_fb_send_rect(struct drm_framebuffer *fb, const struct iosys_map *map,
 		width * 2 * drm_rect_height(rect) + MS912X_FRAME_OVERHEAD;
 	queue_work(ms912x->workqueue, &current_request->work);
 	ms912x->current_request = 1 - ms912x->current_request;
-	goto dev_exit;
+	goto unlock;
 
 request_complete:
 	complete(&current_request->done);
-dev_exit:
+unlock:
+	mutex_unlock(&ms912x->update_lock);
 	drm_dev_exit(idx);
 	return ret;
+}
+
+void ms912x_idle_work(struct work_struct *work)
+{
+	struct ms912x_device *ms912x =
+		container_of(work, struct ms912x_device, idle_work.work);
+	struct ms912x_usb_request *request;
+	int idx;
+
+	if (!idle_refresh_ms)
+		return;
+
+	if (!drm_dev_enter(&ms912x->drm, &idx))
+		goto reschedule;
+
+	mutex_lock(&ms912x->update_lock);
+	if (!ms912x->screen_muted && ms912x->has_frame &&
+	    time_after_eq(jiffies,
+			  ms912x->last_send + msecs_to_jiffies(idle_refresh_ms))) {
+		/* Resend the last completed frame to keep the panel lit. */
+		request = &ms912x->requests[ms912x->last_request];
+		if (completion_done(&request->done)) {
+			reinit_completion(&request->done);
+			if (!queue_work(ms912x->workqueue, &request->work))
+				complete(&request->done);
+			else
+				ms912x->last_send = jiffies;
+		}
+	}
+	mutex_unlock(&ms912x->update_lock);
+	drm_dev_exit(idx);
+
+reschedule:
+	if (idle_refresh_ms)
+		schedule_delayed_work(&ms912x->idle_work,
+				      msecs_to_jiffies(idle_refresh_ms));
 }

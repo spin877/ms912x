@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
 #include <linux/completion.h>
+#include <linux/jiffies.h>
 #include <linux/limits.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
@@ -158,9 +159,15 @@ static void ms912x_crtc_atomic_enable(struct drm_crtc *crtc,
 	}
 
 	/* The screen stays muted until the first frame has been
-	 * transferred; the worker unmutes it then.
+	 * transferred; the worker unmutes it then. Also kick the idle
+	 * keepalive that resends the last frame so the panel does
+	 * not blank when idle.
 	 */
 	ms912x->screen_muted = true;
+	ms912x->has_frame = false;
+	if (idle_refresh_ms)
+		schedule_delayed_work(&ms912x->idle_work,
+				      msecs_to_jiffies(idle_refresh_ms));
 }
 
 static void ms912x_cancel_transfer_work(struct ms912x_device *ms912x)
@@ -183,6 +190,8 @@ static void ms912x_crtc_atomic_disable(struct drm_crtc *crtc,
 	int ret;
 
 	ms912x_cancel_transfer_work(ms912x);
+	cancel_delayed_work_sync(&ms912x->idle_work);
+	ms912x->has_frame = false;
 	ret = ms912x_power_off(ms912x);
 	if (ret && ret != -ENODEV)
 		drm_err(dev, "failed to power off display: %d\n", ret);
@@ -344,6 +353,10 @@ static int ms912x_usb_probe(struct usb_interface *interface,
 	ret = devm_mutex_init(&interface->dev, &ms912x->ctrl_lock);
 	if (ret)
 		return ret;
+	ret = devm_mutex_init(&interface->dev, &ms912x->update_lock);
+	if (ret)
+		return ret;
+	INIT_DELAYED_WORK(&ms912x->idle_work, ms912x_idle_work);
 
 	if (!usb_check_bulk_endpoints(interface, ms912x_bulk_out_endpoints))
 		return -ENXIO;
@@ -457,6 +470,7 @@ static void ms912x_usb_disconnect(struct usb_interface *interface)
 	drm_dev_unplug(dev);
 	drm_atomic_helper_shutdown(dev);
 	ms912x_cancel_transfer_work(ms912x);
+	cancel_delayed_work_sync(&ms912x->idle_work);
 	ms912x_free_request(&ms912x->requests[0]);
 	ms912x_free_request(&ms912x->requests[1]);
 }
