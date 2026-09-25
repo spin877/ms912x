@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
 #include <linux/completion.h>
+#include <linux/debugfs.h>
 #include <linux/jiffies.h>
 #include <linux/limits.h>
 #include <linux/module.h>
@@ -165,9 +166,9 @@ static void ms912x_crtc_atomic_enable(struct drm_crtc *crtc,
 	 */
 	ms912x->screen_muted = true;
 	ms912x->has_frame = false;
-	if (idle_refresh_ms)
+	if (ms912x->idle_refresh_ms)
 		schedule_delayed_work(&ms912x->idle_work,
-				      msecs_to_jiffies(idle_refresh_ms));
+				      msecs_to_jiffies(ms912x->idle_refresh_ms));
 }
 
 static void ms912x_cancel_transfer_work(struct ms912x_device *ms912x)
@@ -350,6 +351,8 @@ static int ms912x_usb_probe(struct usb_interface *interface,
 		return PTR_ERR(ms912x);
 
 	ms912x->intf = interface;
+	/* Same 2500 ms the official driver uses between idle resends. */
+	ms912x->idle_refresh_ms = 2500;
 	ret = devm_mutex_init(&interface->dev, &ms912x->ctrl_lock);
 	if (ret)
 		return ret;
@@ -450,6 +453,15 @@ static int ms912x_usb_probe(struct usb_interface *interface,
 	ret = drm_dev_register(dev, 0);
 	if (ret)
 		goto err_free_request_1;
+
+	/* Live tuning for the idle keepalive (ms, 0 disables). The DRM
+	 * core removes this automatically on unregister; no module
+	 * parameter, per upstream policy.
+	 */
+	if (dev->debugfs_root)
+		debugfs_create_u32("ms912x_idle_ms", 0600,
+				   dev->debugfs_root,
+				   &ms912x->idle_refresh_ms);
 
 	drm_client_setup(dev, NULL);
 

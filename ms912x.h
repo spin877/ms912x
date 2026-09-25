@@ -142,6 +142,10 @@ struct ms912x_device {
 	bool has_frame;
 	unsigned long last_send;
 	int last_request;
+	/* Resend interval in ms (default 2500, 0 disables); tuned live
+	 * through debugfs, no module parameter (upstream policy).
+	 */
+	unsigned int idle_refresh_ms;
 
 	/* Double buffer to allow memcpy and transfer
 	 * to happen in parallel
@@ -229,5 +233,4 @@ void ms912x_free_request(struct ms912x_usb_request *request);
 int ms912x_init_request(struct ms912x_device *ms912x,
 			struct ms912x_usb_request *request, size_t len);
 void ms912x_idle_work(struct work_struct *work);
-extern unsigned int idle_refresh_ms;
 #endif

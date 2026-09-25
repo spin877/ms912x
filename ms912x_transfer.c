@@ -23,12 +23,6 @@
 
 #include "ms912x.h"
 
-unsigned int idle_refresh_ms = 2500;
-module_param_named(idle_refresh_ms, idle_refresh_ms, uint, 0644);
-MODULE_PARM_DESC(idle_refresh_ms,
-		 "Resend the last frame when idle for this long (ms, 0 disables, default 2500). "
-		 "The 912C firmware blanks the panel without regular bulk traffic.");
-
 #define MS912X_BULK_CHUNK_LEN	(64 * 1024u)
 
 static int ms912x_send_buffer(struct ms912x_device *ms912x,
@@ -324,7 +318,7 @@ void ms912x_idle_work(struct work_struct *work)
 	struct ms912x_usb_request *request;
 	int idx;
 
-	if (!idle_refresh_ms)
+	if (!ms912x->idle_refresh_ms)
 		return;
 
 	if (!drm_dev_enter(&ms912x->drm, &idx))
@@ -333,7 +327,8 @@ void ms912x_idle_work(struct work_struct *work)
 	mutex_lock(&ms912x->update_lock);
 	if (!ms912x->screen_muted && ms912x->has_frame &&
 	    time_after_eq(jiffies,
-			  ms912x->last_send + msecs_to_jiffies(idle_refresh_ms))) {
+			  ms912x->last_send +
+			  msecs_to_jiffies(ms912x->idle_refresh_ms))) {
 		/* Resend the last completed frame to keep the panel lit. */
 		request = &ms912x->requests[ms912x->last_request];
 		if (completion_done(&request->done)) {
@@ -348,7 +343,7 @@ void ms912x_idle_work(struct work_struct *work)
 	drm_dev_exit(idx);
 
 reschedule:
-	if (idle_refresh_ms)
+	if (ms912x->idle_refresh_ms)
 		schedule_delayed_work(&ms912x->idle_work,
-				      msecs_to_jiffies(idle_refresh_ms));
+				      msecs_to_jiffies(ms912x->idle_refresh_ms));
 }
