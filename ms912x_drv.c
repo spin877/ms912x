@@ -193,6 +193,13 @@ static void ms912x_crtc_atomic_disable(struct drm_crtc *crtc,
 	ms912x_cancel_transfer_work(ms912x);
 	cancel_delayed_work_sync(&ms912x->idle_work);
 	ms912x->has_frame = false;
+	/* Official disable order: transfer, video, screen, power. */
+	if (ms912x_trans_enable(ms912x, 0))
+		drm_err(dev, "failed to disable transfer\n");
+	if (ms912x_video_enable(ms912x, 0))
+		drm_err(dev, "failed to disable video\n");
+	if (ms912x_screen_enable(ms912x, 0))
+		drm_err(dev, "failed to disable screen\n");
 	ret = ms912x_power_off(ms912x);
 	if (ret && ret != -ENODEV)
 		drm_err(dev, "failed to power off display: %d\n", ret);

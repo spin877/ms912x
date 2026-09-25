@@ -344,8 +344,8 @@ static int ms912x_write_xdata_byte(struct ms912x_device *ms912x,
 
 int ms912x_screen_enable(struct ms912x_device *ms912x, u8 enable)
 {
-	u8 value = enable ? MS912X_SCREEN_ENABLE_BIT : 0x00;
-	int sig;
+	u8 value;
+	int sig, cur;
 
 	/* Only the 912X chip on the DIGITAL port is handled; anything
 	 * else is left untouched.
@@ -359,9 +359,38 @@ int ms912x_screen_enable(struct ms912x_device *ms912x, u8 enable)
 	if (sig != MS912X_CHIP_ID_SIGNATURE_MSB)
 		return 0;
 
+	/* Read-modify-write like the official driver, so the other
+	 * bits of the register are preserved.
+	 */
+	cur = ms912x_read_byte(ms912x, MS912X_XDATA_SCREEN_912X_DIGITAL);
+	if (cur < 0)
+		return cur;
+	value = enable ? cur | MS912X_SCREEN_ENABLE_BIT :
+			 cur & ~MS912X_SCREEN_ENABLE_BIT;
+
 	return ms912x_write_xdata_byte(ms912x,
 				       MS912X_XDATA_SCREEN_912X_DIGITAL,
 				       value);
+}
+
+int ms912x_trans_enable(struct ms912x_device *ms912x, u8 enable)
+{
+	u8 data[6];
+
+	memset(data, 0, sizeof(data));
+	data[0] = enable ? 1 : 0;
+
+	return ms912x_write_6_bytes(ms912x, MS912X_CMD_UNKNOWN2, data);
+}
+
+int ms912x_video_enable(struct ms912x_device *ms912x, u8 enable)
+{
+	u8 data[6];
+
+	memset(data, 0, sizeof(data));
+	data[0] = enable ? 1 : 0;
+
+	return ms912x_write_6_bytes(ms912x, MS912X_CMD_OUTPUT_ENABLE, data);
 }
 
 int ms912x_set_resolution(struct ms912x_device *ms912x,

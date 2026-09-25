@@ -224,6 +224,8 @@ int ms912x_set_resolution(struct ms912x_device *ms912x,
 int ms912x_power_on(struct ms912x_device *ms912x);
 int ms912x_power_off(struct ms912x_device *ms912x);
 int ms912x_screen_enable(struct ms912x_device *ms912x, u8 enable);
+int ms912x_trans_enable(struct ms912x_device *ms912x, u8 enable);
+int ms912x_video_enable(struct ms912x_device *ms912x, u8 enable);
 
 int ms912x_fb_send_rect(struct drm_framebuffer *fb, const struct iosys_map *map,
 			struct drm_format_conv_state *fmtcnv_state,
