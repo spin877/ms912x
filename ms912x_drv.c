@@ -97,6 +97,7 @@ static const struct ms912x_mode ms912x_mode_list[] = {
 	MS912X_MODE(1600, 1200, 60, 0x73), /* 60.00 Hz */
 	MS912X_MODE(1680, 1050, 60, 0x78), /* 59.95 Hz */
 	MS912X_MODE(1920, 1080, 60, 0x81), /* 60.00 Hz */
+	MS912X_MODE(1024, 600, 60, 0x96), /* 60.00 Hz, native panel 7" 345f:9132 */
 };
 
 static const struct ms912x_mode *
