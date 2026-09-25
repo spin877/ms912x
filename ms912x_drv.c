@@ -166,9 +166,9 @@ static void ms912x_crtc_atomic_enable(struct drm_crtc *crtc,
 	 */
 	ms912x->screen_muted = true;
 	ms912x->has_frame = false;
-	if (ms912x->idle_refresh_ms)
-		schedule_delayed_work(&ms912x->idle_work,
-				      msecs_to_jiffies(ms912x->idle_refresh_ms));
+	schedule_delayed_work(&ms912x->idle_work,
+			      msecs_to_jiffies(ms912x->idle_refresh_ms ?
+					       ms912x->idle_refresh_ms : 2500));
 }
 
 static void ms912x_cancel_transfer_work(struct ms912x_device *ms912x)

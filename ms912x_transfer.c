@@ -318,14 +318,12 @@ void ms912x_idle_work(struct work_struct *work)
 	struct ms912x_usb_request *request;
 	int idx;
 
-	if (!ms912x->idle_refresh_ms)
-		return;
-
 	if (!drm_dev_enter(&ms912x->drm, &idx))
 		goto reschedule;
 
 	mutex_lock(&ms912x->update_lock);
-	if (!ms912x->screen_muted && ms912x->has_frame &&
+	if (ms912x->idle_refresh_ms && !ms912x->screen_muted &&
+	    ms912x->has_frame &&
 	    time_after_eq(jiffies,
 			  ms912x->last_send +
 			  msecs_to_jiffies(ms912x->idle_refresh_ms))) {
@@ -343,7 +341,11 @@ void ms912x_idle_work(struct work_struct *work)
 	drm_dev_exit(idx);
 
 reschedule:
-	if (ms912x->idle_refresh_ms)
-		schedule_delayed_work(&ms912x->idle_work,
-				      msecs_to_jiffies(ms912x->idle_refresh_ms));
+	/* Always re-arm, even when disabled: a no-op wakeup every 2.5 s
+	 * keeps the loop alive so re-enabling the interval through
+	 * debugfs takes effect without waiting for a modeset.
+	 */
+	schedule_delayed_work(&ms912x->idle_work,
+			      msecs_to_jiffies(ms912x->idle_refresh_ms ?
+					       ms912x->idle_refresh_ms : 2500));
 }
