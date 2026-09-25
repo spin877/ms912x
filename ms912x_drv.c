@@ -193,13 +193,18 @@ static void ms912x_crtc_atomic_disable(struct drm_crtc *crtc,
 	ms912x_cancel_transfer_work(ms912x);
 	cancel_delayed_work_sync(&ms912x->idle_work);
 	ms912x->has_frame = false;
-	/* Official disable order: transfer, video, screen, power. */
-	if (ms912x_trans_enable(ms912x, 0))
-		drm_err(dev, "failed to disable transfer\n");
-	if (ms912x_video_enable(ms912x, 0))
-		drm_err(dev, "failed to disable video\n");
-	if (ms912x_screen_enable(ms912x, 0))
-		drm_err(dev, "failed to disable screen\n");
+	/* Official disable order: transfer, video, screen, power.
+	 * -ENODEV just means the device is already gone (unplug).
+	 */
+	ret = ms912x_trans_enable(ms912x, 0);
+	if (ret && ret != -ENODEV)
+		drm_err(dev, "failed to disable transfer: %d\n", ret);
+	ret = ms912x_video_enable(ms912x, 0);
+	if (ret && ret != -ENODEV)
+		drm_err(dev, "failed to disable video: %d\n", ret);
+	ret = ms912x_screen_enable(ms912x, 0);
+	if (ret && ret != -ENODEV)
+		drm_err(dev, "failed to disable screen: %d\n", ret);
 	ret = ms912x_power_off(ms912x);
 	if (ret && ret != -ENODEV)
 		drm_err(dev, "failed to power off display: %d\n", ret);
@@ -494,10 +499,17 @@ static void ms912x_usb_disconnect(struct usb_interface *interface)
 	struct ms912x_device *ms912x = usb_get_intfdata(interface);
 	struct drm_device *dev = &ms912x->drm;
 
-	drm_dev_unplug(dev);
-	drm_atomic_helper_shutdown(dev);
 	ms912x_cancel_transfer_work(ms912x);
 	cancel_delayed_work_sync(&ms912x->idle_work);
+	/* Drop the connector so compositors forget the output instead
+	 * of keeping a ghost: without this, replugging never triggers
+	 * a fresh modeset and the panel stays black (no unmute).
+	 * Unregister is idempotent, release cleans up the rest.
+	 */
+	drm_connector_unregister(&ms912x->connector);
+	drm_kms_helper_hotplug_event(dev);
+	drm_dev_unplug(dev);
+	drm_atomic_helper_shutdown(dev);
 	ms912x_free_request(&ms912x->requests[0]);
 	ms912x_free_request(&ms912x->requests[1]);
 }
