@@ -426,6 +426,14 @@ static int ms912x_usb_probe(struct usb_interface *interface,
 	if (ret)
 		return ret;
 
+	/* Power the chip here, not only at modeset: after a physical
+	 * replug the compositor may resume flipping without a fresh
+	 * modeset, and bulk transfers time out on an unpowered chip.
+	 */
+	ret = ms912x_power_on(ms912x);
+	if (ret)
+		return ret;
+
 	ms912x->workqueue =
 		drmm_alloc_ordered_workqueue(dev, DRIVER_NAME, 0);
 	if (IS_ERR(ms912x->workqueue))
