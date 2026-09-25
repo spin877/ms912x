@@ -358,7 +358,10 @@ static int ms912x_usb_probe(struct usb_interface *interface,
 		return PTR_ERR(ms912x);
 
 	ms912x->intf = interface;
-	/* Same 2500 ms the official driver uses between idle resends. */
+	/* Same 2500 ms the official driver uses between idle resends.
+	 * Lower it through debugfs (e.g. to 1000) if the panel still
+	 * flickers at 2500: some units blank sooner when idle.
+	 */
 	ms912x->idle_refresh_ms = 2500;
 	ret = devm_mutex_init(&interface->dev, &ms912x->ctrl_lock);
 	if (ret)
