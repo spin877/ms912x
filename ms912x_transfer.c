@@ -7,12 +7,9 @@
 #include <linux/dma-direction.h>
 #include <linux/iosys-map.h>
 #include <linux/jiffies.h>
-#include <linux/math.h>
 #include <linux/minmax.h>
-#include <linux/scatterlist.h>
 #include <linux/slab.h>
 #include <linux/string.h>
-#include <linux/timer.h>
 #include <linux/unaligned.h>
 #include <linux/usb.h>
 #include <linux/vmalloc.h>
@@ -26,11 +23,62 @@
 
 #include "ms912x.h"
 
-static void ms912x_request_timeout(struct timer_list *t)
-{
-	struct ms912x_usb_request *request = timer_container_of(request, t, timer);
+#define MS912X_BULK_CHUNK_LEN	(64 * 1024u)
 
-	usb_sg_cancel(&request->sgr);
+static int ms912x_send_buffer(struct ms912x_device *ms912x,
+			      struct usb_device *usbdev,
+			      u8 *buf, size_t len)
+{
+	unsigned int offset = 0;
+	unsigned int remaining = len;
+	u8 *chunk;
+	int ret = 0;
+
+	/* The 912C firmware silently drops whole multi-MB bulk transfers
+	 * even when the USB stack reports success. The official driver
+	 * splits every frame into 64KB chunks; do the same via a bounce
+	 * buffer (the transfer buffer is vmalloc'd, not DMA-suitable).
+	 */
+	chunk = kmalloc(MS912X_BULK_CHUNK_LEN, GFP_KERNEL);
+	if (!chunk)
+		return -ENOMEM;
+
+	while (remaining > 0) {
+		unsigned int chunk_len = min(remaining, MS912X_BULK_CHUNK_LEN);
+		int actual = 0;
+
+		memcpy(chunk, buf + offset, chunk_len);
+		ret = usb_bulk_msg(usbdev, ms912x->bulk_pipe, chunk,
+				   chunk_len, &actual, 2000);
+		if (ret) {
+			drm_err_ratelimited(&ms912x->drm,
+					    "bulk chunk failed: %d (off %u len %u)\n",
+					    ret, offset, chunk_len);
+			break;
+		}
+		if (actual != (int)chunk_len) {
+			ret = -EIO;
+			break;
+		}
+		offset += chunk_len;
+		remaining -= chunk_len;
+	}
+	kfree(chunk);
+
+	if (!ret) {
+		/* Every frame ends with a zero-length packet. */
+		int actual = 0;
+		u8 dummy = 0;
+
+		ret = usb_bulk_msg(usbdev, ms912x->bulk_pipe, &dummy, 0,
+				   &actual, 2000);
+		if (ret)
+			drm_err_ratelimited(&ms912x->drm,
+					    "failed to send zero packet: %d\n",
+					    ret);
+	}
+
+	return ret;
 }
 
 static void ms912x_request_work(struct work_struct *work)
@@ -39,8 +87,6 @@ static void ms912x_request_work(struct work_struct *work)
 		container_of(work, struct ms912x_usb_request, work);
 	struct ms912x_device *ms912x = request->ms912x;
 	struct usb_device *usbdev = interface_to_usbdev(ms912x->intf);
-	struct usb_sg_request *sgr = &request->sgr;
-	struct sg_table *transfer_sgt = &request->transfer_sgt;
 	int idx, ret;
 
 	if (!drm_dev_enter(&ms912x->drm, &idx)) {
@@ -48,23 +94,9 @@ static void ms912x_request_work(struct work_struct *work)
 		goto complete;
 	}
 
-	ret = usb_sg_init(sgr, usbdev, ms912x->bulk_pipe, 0, transfer_sgt->sgl,
-			  transfer_sgt->nents, request->transfer_len,
-			  GFP_KERNEL);
-	if (ret)
-		goto dev_exit;
+	ret = ms912x_send_buffer(ms912x, usbdev, request->transfer_buffer,
+				 request->transfer_len);
 
-	mod_timer(&request->timer, jiffies + msecs_to_jiffies(5000));
-	usb_sg_wait(sgr);
-
-	if (!timer_delete_sync(&request->timer))
-		ret = -ETIMEDOUT;
-	else if (sgr->status < 0)
-		ret = sgr->status;
-	else if (sgr->bytes != request->transfer_len)
-		ret = -EIO;
-
-dev_exit:
 	drm_dev_exit(idx);
 complete:
 	if (ret < 0 && ret != -ENODEV)
@@ -78,8 +110,6 @@ void ms912x_free_request(struct ms912x_usb_request *request)
 	if (!request->transfer_buffer)
 		return;
 
-	timer_shutdown_sync(&request->timer);
-	sg_free_table(&request->transfer_sgt);
 	vfree(request->transfer_buffer);
 	request->transfer_buffer = NULL;
 }
@@ -87,43 +117,19 @@ void ms912x_free_request(struct ms912x_usb_request *request)
 int ms912x_init_request(struct ms912x_device *ms912x,
 			struct ms912x_usb_request *request, size_t len)
 {
-	int ret;
-	unsigned int i, num_pages;
 	void *data;
-	struct page **pages;
-	void *ptr;
 
 	data = vmalloc_32(len);
 	if (!data)
 		return -ENOMEM;
-
-	num_pages = DIV_ROUND_UP(len, PAGE_SIZE);
-	pages = kmalloc_array(num_pages, sizeof(struct page *), GFP_KERNEL);
-	if (!pages) {
-		ret = -ENOMEM;
-		goto err_vfree;
-	}
-
-	for (i = 0, ptr = data; i < num_pages; i++, ptr += PAGE_SIZE)
-		pages[i] = vmalloc_to_page(ptr);
-	ret = sg_alloc_table_from_pages(&request->transfer_sgt, pages,
-					num_pages, 0, len, GFP_KERNEL);
-	kfree(pages);
-	if (ret)
-		goto err_vfree;
 
 	request->transfer_buffer = data;
 	request->ms912x = ms912x;
 
 	init_completion(&request->done);
 	complete(&request->done);
-	timer_setup(&request->timer, ms912x_request_timeout, 0);
 	INIT_WORK(&request->work, ms912x_request_work);
 	return 0;
-
-err_vfree:
-	vfree(data);
-	return ret;
 }
 
 static inline unsigned int ms912x_rgb_to_y(unsigned int r, unsigned int g,

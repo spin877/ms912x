@@ -6,8 +6,6 @@
 #include <linux/bits.h>
 #include <linux/completion.h>
 #include <linux/mutex.h>
-#include <linux/scatterlist.h>
-#include <linux/timer_types.h>
 #include <linux/types.h>
 #include <linux/usb.h>
 #include <linux/workqueue.h>
@@ -78,10 +76,7 @@ struct ms912x_usb_request {
 	void *transfer_buffer;
 	struct ms912x_device *ms912x;
 	size_t transfer_len;
-	struct sg_table transfer_sgt;
-	struct usb_sg_request sgr;
 	struct work_struct work;
-	struct timer_list timer;
 	struct completion done;
 };
 
