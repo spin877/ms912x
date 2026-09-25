@@ -363,6 +363,11 @@ static int ms912x_usb_probe(struct usb_interface *interface,
 	 * flickers at 2500: some units blank sooner when idle.
 	 */
 	ms912x->idle_refresh_ms = 2500;
+	/* Muted until the first successfully transferred frame unmutes
+	 * it: this also covers the replug case, where the compositor
+	 * may resume flipping without a fresh modeset.
+	 */
+	ms912x->screen_muted = true;
 	ret = devm_mutex_init(&interface->dev, &ms912x->ctrl_lock);
 	if (ret)
 		return ret;
