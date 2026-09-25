@@ -380,7 +380,7 @@ int ms912x_trans_enable(struct ms912x_device *ms912x, u8 enable)
 	memset(data, 0, sizeof(data));
 	data[0] = enable ? 1 : 0;
 
-	return ms912x_write_6_bytes(ms912x, MS912X_CMD_UNKNOWN2, data);
+	return ms912x_write_6_bytes(ms912x, MS912X_CMD_TRANSFER, data);
 }
 
 int ms912x_video_enable(struct ms912x_device *ms912x, u8 enable)
@@ -408,7 +408,7 @@ int ms912x_set_resolution(struct ms912x_device *ms912x,
 	/* Sequence obtained from Windows USB captures */
 	memset(data, 0, sizeof(data));
 	data[0] = 0;
-	ret = ms912x_write_6_bytes(ms912x, MS912X_CMD_UNKNOWN2, data);
+	ret = ms912x_write_6_bytes(ms912x, MS912X_CMD_TRANSFER, data);
 	if (ret < 0)
 		return ret;
 
@@ -424,7 +424,7 @@ int ms912x_set_resolution(struct ms912x_device *ms912x,
 
 	memset(data, 0, sizeof(data));
 	data[0] = 0x03;
-	ret = ms912x_write_6_bytes(ms912x, MS912X_CMD_UNKNOWN1, data);
+	ret = ms912x_write_6_bytes(ms912x, MS912X_CMD_TRANS_MODE, data);
 	if (ret < 0)
 		return ret;
 
@@ -449,7 +449,7 @@ int ms912x_set_resolution(struct ms912x_device *ms912x,
 
 	memset(data, 0, sizeof(data));
 	data[0] = 1;
-	ret = ms912x_write_6_bytes(ms912x, MS912X_CMD_UNKNOWN2, data);
+	ret = ms912x_write_6_bytes(ms912x, MS912X_CMD_TRANSFER, data);
 	if (ret < 0)
 		return ret;
 
