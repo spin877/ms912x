@@ -111,9 +111,10 @@ static void ms912x_request_work(struct work_struct *work)
 		if (ms912x->screen_muted) {
 			/* First frame transferred: unmute the screen. The 913x
 			 * firmware keeps the panel black without this.
+			 * Keep the flag on failure so the next frame retries.
 			 */
-			ms912x_screen_enable(ms912x, 1);
-			ms912x->screen_muted = false;
+			if (!ms912x_screen_enable(ms912x, 1))
+				ms912x->screen_muted = false;
 		}
 	}
 	mutex_unlock(&ms912x->update_lock);
